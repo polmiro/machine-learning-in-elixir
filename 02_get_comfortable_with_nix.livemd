@@ -1,0 +1,226 @@
+# Chapter 2: Get comfortable with NX
+
+```elixir
+Mix.install(
+  [
+    {:nx, "~> 0.6.1"},
+    {:exla, "~> 0.6.1"},
+    {:benchee, github: "bencheeorg/benchee", override: true}
+  ],
+  config: [
+    nx: [
+      default_backend: EXLA.Backend,
+      default_defn_options: [compiler: EXLA, client: :cuda]
+    ]
+  ],
+  system_env: [
+    XLA_TARGET: "cuda118"
+  ]
+)
+
+Nx.global_default_backend(EXLA.Backend)
+```
+
+## Understanding Nx Tensors
+
+```elixir
+EXLA.Client.get_supported_platforms()
+```
+
+### Building some tensors.
+
+```elixir
+x = Nx.tensor([1, 2, 3])
+a = Nx.tensor([[1, 2, 3], [4, 5, 6]])
+b = Nx.tensor(1.0)
+c = Nx.tensor([[[[[[1.0, 2]]]]]])
+dbg(x)
+dbg(a)
+dbg(b)
+dbg(c)
+```
+
+### Understanding the different types and shapes of tensors.
+
+```elixir
+a = Nx.tensor([1, 2, 3])
+b = Nx.tensor([1.0, 2.0, 3.0])
+dbg(a)
+dbg(b)
+```
+
+Underflowed values.
+
+```elixir
+Nx.tensor(0.0000000000000000000000000000000000000000000001)
+```
+
+Avoiding underflowed values with the right type for the range of the value.
+
+```elixir
+# not underflowed value
+Nx.tensor(1.0e-45, type: {:f, 64})
+```
+
+Overflowed values.
+
+```elixir
+Nx.tensor(128, type: {:s, 8})
+```
+
+Tensors have homogeneous types. Notice the one below includes integers and floats but will be all cast to a tensor that uses only floats. The higher order type is preserved in order to favour not losing precision. The use of homogeneous types eliminates the need to track additional information about every value in the tensor and also allows for optimizations for certain algorithms.
+
+```elixir
+Nx.tensor([1.0, 2, 3])
+```
+
+The tensors shape describes the size of each dimension in the tensor.
+
+```elixir
+a = Nx.tensor([1, 2])
+b = Nx.tensor([[1, 2], [3, 4]])
+c = Nx.tensor([[[1, 2], [3, 4]], [[5, 6], [7, 8]]])
+
+dbg(a)
+dbg(b)
+dbg(c)
+```
+
+A tensor's rank describes the number of dimensions. Scalars are tensors with 0 dimensions because they d o not have a shape. See example below.
+
+```elixir
+Nx.tensor(10)
+```
+
+Names tensors allow to describe dimensions or axis names in order to be more idiomatic, effectively giving semantics to each dimension.
+
+```elixir
+Nx.tensor([[1, 2, 3], [4, 5, 6]], names: [:x, :y])
+```
+
+Viewing the raw data of a tensor in binary format.
+
+```elixir
+a = Nx.tensor([[1, 2, 3], [4, 5, 6]])
+
+Nx.to_binary(a)
+```
+
+Because Nx tensors store data in binary format it is more performant to build NX tensors from binary values directly.
+
+```elixir
+value = <<1::64-signed-native, 2::64-signed-native, 3::64-signed-native>>
+Nx.from_binary(value, {:s, 64})
+```
+
+The default from Nx.from_binary/2 creates 1-dimensional tensors, the shape can be changed using Nx.reshape/2.
+
+```elixir
+value
+|> Nx.from_binary({:s, 64})
+|> Nx.reshape({1, 3})
+```
+
+Watch out for endiannnes, aka: in what order are bytes are interpreted in the computer. The native modifier tells the VM to use the system's endiannes. For the most part no reason to worry but something to keep in mind when reading data from other computers with different endianness.
+
+<!-- livebook:{"break_markdown":true} -->
+
+Tensors are immutable! This is part of the reason defn exists.
+
+<!-- livebook:{"break_markdown":true} -->
+
+### Operations on tensors
+
+<!-- livebook:{"break_markdown":true} -->
+
+Reshape a tensor and change it's type.
+
+* Nx.as_type/2 is a linear-time operation since it manipulates the underlying data.
+* Nx.reshape/2 is a constant-time operation since it does not manipulate the underlying data.
+
+```elixir
+a = Nx.tensor([1, 2, 3])
+
+a
+|> Nx.as_type({:f, 32})
+|> Nx.reshape({1, 3, 1})
+```
+
+Nx.bitcast/2 is a constant-time operation but it is not usually the desired behaviour.
+
+```elixir
+Nx.bitcast(a, {:f, 64})
+```
+
+Element-wise operators apply the same operation to all elements in any nesting level of the Nx tensor. Using something like Enum is impractical due to the many different nesting level shapes an Nx tensor may have.
+
+```elixir
+a = Nx.tensor([[[-1, -2, -3], [-4, -5, -6]], [[1, 2, 3], [4, 5, 6]]])
+Nx.abs(a)
+```
+
+```elixir
+a = Nx.tensor([[1, 2, 3], [4, 5, 6]])
+b = Nx.tensor([[6, 7, 8], [9, 10, 11]])
+
+Nx.add(a, b) |> dbg
+Nx.multiply(a, b) |> dbg
+```
+
+When two tensors have a binary operation applied to them but do not have the same shape, Nx will try to broadcast the tensors together. That can only happen if one of the shapes is a scalar, the corresponding dimensions have teh same size or one of the diemnsions is size 1.
+
+```elixir
+Nx.add(5, Nx.tensor([1, 2, 3])) |> dbg
+Nx.add(Nx.tensor([1, 2, 3]), Nx.tensor([[4, 5, 6], [7, 8, 9]])) |> dbg
+```
+
+Reduction operations compute aggregates over a tensor. Built-in sum, average, min, max, etc.
+
+```elixir
+revs = Nx.tensor([85, 76, 42, 34, 46, 23, 52, 99, 22, 32, 85, 51])
+Nx.sum(revs) |> dbg()
+
+revs =
+  Nx.tensor(
+    [
+      [21, 64, 86, 26, 74, 81, 38, 79, 70, 48, 85, 33],
+      [64, 82, 48, 39, 70, 71, 81, 53, 50, 67, 36, 50],
+      [68, 74, 39, 78, 95, 62, 53, 21, 43, 59, 51, 88],
+      [47, 74, 97, 51, 98, 47, 61, 36, 83, 55, 74, 43]
+    ],
+    names: [:year, :month]
+  )
+
+Nx.sum(revs, axes: [:year]) |> dbg()
+
+Nx.sum(revs, axes: [:month]) |> dbg()
+```
+
+## Going from def to defn
+
+> I run into some issues after setting up EXLA to use the GPU. The CUDA operation failed.
+
+```elixir
+defmodule Softmax do
+  import Nx.Defn
+
+  defn(softmax(n), do: Nx.exp(n) / Nx.sum(Nx.exp(n)))
+end
+```
+
+```elixir
+key = Nx.Random.key(42)
+{tensor, _key} = Nx.Random.uniform(key, shape: {1_000_000})
+
+Benchee.run(
+  %{
+    "JIT with EXLA" => fn ->
+      apply(EXLA.jit(&Softmax.softmax/1), [tensor])
+    end,
+    "Regular Elixir" => fn ->
+      Softmax.softmax(tensor)
+    end
+  },
+  time: 10
+)
+```

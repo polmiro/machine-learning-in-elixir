@@ -120,3 +120,7 @@ To achieve a better quality you can increase the number of steps and images.
 
 * CPU: 60 to 80 seconds.
 * CUDA on Nvidia 4070ti: ~6 seconds.
+
+## Caveats
+
+Run into some issues with CUDA in lxc container, the last comments on [this thread](https://github.com/tensorflow/tensorflow/issues/53341) about ubuntu helped fixing it.
