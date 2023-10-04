@@ -11,7 +11,7 @@ Mix.install(
   config: [
     nx: [
       default_backend: EXLA.Backend,
-      default_defn_options: [compiler: EXLA, client: :cuda]
+      default_defn_options: [compiler: EXLA, client: :cuda, lazy_transfers: :always]
     ]
   ],
   system_env: [
@@ -19,7 +19,7 @@ Mix.install(
   ]
 )
 
-Nx.global_default_backend(EXLA.Backend)
+Nx.gvaebal_default_backend(EXLA.Backend)
 ```
 
 ## Platforms
@@ -59,13 +59,15 @@ repository_id = "CompVis/stable-diffusion-v1-4"
 
 {:ok, unet} =
   Bumblebee.load_model({:hf, repository_id, subdir: "unet"},
-    params_filename: "diffusion_pytorch_model.bin"
+    params_filename: "diffusion_pytorch_model.bin",
+    backend: {EXLA.Backend, client: :host}
   )
 
 {:ok, vae} =
   Bumblebee.load_model({:hf, repository_id, subdir: "vae"},
     architecture: :decoder,
-    params_filename: "diffusion_pytorch_model.bin"
+    params_filename: "diffusion_pytorch_model.bin",
+    backend: {EXLA.Backend, client: :host}
   )
 
 {:ok, scheduler} = Bumblebee.load_scheduler({:hf, repository_id, subdir: "scheduler"})
@@ -84,12 +86,12 @@ With all the models loaded, we can now configure a serving implementation of the
 ```elixir
 serving =
   Bumblebee.Diffusion.StableDiffusion.text_to_image(clip, unet, vae, tokenizer, scheduler,
-    num_steps: 300,
+    num_steps: 50,
     num_images_per_prompt: 1,
     safety_checker: safety_checker,
     safety_checker_featurizer: featurizer,
     compile: [batch_size: 1, sequence_length: 60],
-    defn_options: [compiler: EXLA]
+    defn_options: [compiler: EXLA, lazy_transfers: :always]
   )
 
 prompt_input =
@@ -124,3 +126,5 @@ To achieve a better quality you can increase the number of steps and images.
 ## Caveats
 
 Run into some issues with CUDA in lxc container, the last comments on [this thread](https://github.com/tensorflow/tensorflow/issues/53341) about ubuntu helped fixing it.
+
+Also, simply restarting the livebook container addressed an issue where memory could not be allocated in the GPU. By running `nvidia-smi` in the host I could see that some lingering processes by livebook were still running even though they seemd to have been finished in the UI.
