@@ -1,0 +1,186 @@
+# Chapter 4: Optimize Everything
+
+```elixir
+Mix.install([
+  {:nx, "~> 0.5"}
+])
+```
+
+## Machine Learning vs Optimization and Curve-Fitting
+
+Machine learning is concerned with reducing the generalization error on unseen inputs. In comparsion to pure optimization or curve-fitting.
+
+Generalization error is known as risk in statistical learning theory. But you cannot optimize for risk when you don't have the entire distribution of possible inputs to a model. So instead you end up optimizing on the empirical dsitribution (aka the training set). Empirical risk minimization (ERM) is a key distinction between optimization and machine learning.
+
+## Defining objectives
+
+Machine learning algorithms never directly optimizing the performance measures, such as accuracy or classification error. Instead they use surrogate loss functions, which are proxies to true objectives.
+
+Some functions analysed that are used at times in some form of loss functions:
+
+* Likelyhood function (MLU: Maximum Likelhood Estimation) measures similarity between functions.
+* Cross-entropy: measure difference between two probability distributions for a given random variable or set of events.
+* Mean Squared Error: average squared difference between true labels and predicted labels.
+
+Most of the optimization algorithms in machine learning do NOT have any guarantees of optimality.
+
+Here comes the idea of convergence.
+
+The best set of model parameters are the global optima of the entire parameter set. Optimization routines are designed to loop to a desired performance threshold.
+
+The models may find a local optima, regions of the parameter space that are better than neighbouring points.
+
+It is key to focus on achieving the threshold needed for the real world task.
+
+## Regularizing to Generalize
+
+Overfitting, generalizing patterns of the training dataset that are particular to the training set only. In overfitting scenarios the model performs very well on the training dataset but has a high generalization error. Some techniques such as ERM and MLE are prone to overfitting when used for machine learning problems.
+
+Underfitting, missing to generalize patterns present in the training set that are globally relevant. In underfitting scenarios the model has already a low training error.
+
+A models capacity is its ability to fit many different functions. For example, linear regression has a hypothesis space that is restricted to linear functions.
+
+The higher capacity of a model the more prone it is to overfitting in comparison to lower capacity. Designing good models requires finding the right balance between scenarios of overfitting and underfitting.
+
+### Regularization
+
+Regularization is any technique used to combat overfitting.
+
+* Complex penalties: Regularization technique that imposes a penalty at model evaluation time. For example, weight-decay substract the L2-Norm (distance from origin). The purpose of weight-decay is the preference for smaller model weights.
+* Early-stopping: model training is stopped if overfitting is detected. Uses a validation set (portions of the original dataset not in the training set) to check if training errors decrease while validation errors increase.
+
+## Descending Gradients
+
+```elixir
+key = Nx.Random.key(42)
+
+{true_params, new_key} = Nx.Random.uniform(key, shape: {32, 1})
+
+true_function = fn params, x ->
+  Nx.dot(x, params)
+end
+
+{train_x, new_key} = Nx.Random.uniform(new_key, shape: {10000, 32})
+train_y = true_function.(true_params, train_x)
+train_data = Enum.zip(Nx.to_batched(train_x, 1), Nx.to_batched(train_y, 1))
+
+{test_x, _new_key} = Nx.Random.uniform(new_key, shape: {10000, 32})
+test_y = true_function.(true_params, test_x)
+test_data = Enum.zip(Nx.to_batched(test_x, 1), Nx.to_batched(test_y, 1))
+```
+
+```elixir
+defmodule SGD do
+  import Nx.Defn
+
+  defn init_random_params(key) do
+    Nx.Random.uniform(key, shape: {32, 1})
+  end
+
+  defn model(params, inputs) do
+    labels = Nx.dot(inputs, params)
+    labels
+  end
+
+  defn mean_squared_error(y_true, y_pred) do
+    y_true
+    |> Nx.subtract(y_pred)
+    |> Nx.pow(2)
+    |> Nx.mean(axes: [-1])
+  end
+
+  defn loss(actual_label, predicted_label) do
+    loss_value = mean_squared_error(actual_label, predicted_label)
+    loss_value
+  end
+
+  defn objective(params, actual_inputs, actual_labels) do
+    predicted_labels = model(params, actual_inputs)
+    loss(actual_labels, predicted_labels)
+  end
+
+  defn step(params, actual_inputs, actual_labels) do
+    {loss, params_grad} =
+      value_and_grad(params, fn params ->
+        objective(params, actual_inputs, actual_labels)
+      end)
+
+    new_params = params - 1.0e-2 * params_grad
+    {loss, new_params}
+  end
+
+  def evaluate(trained_params, test_data) do
+    test_data
+    |> Enum.map(fn {x, y} ->
+      prediction = model(trained_params, x)
+      loss(y, prediction)
+    end)
+    |> Enum.reduce(0, &Nx.add/2)
+  end
+
+  def train(data, iterations, key) do
+    {params, _key} = init_random_params(key)
+    loss = Nx.tensor(0.0)
+
+    {_, trained_params} =
+      for i <- 1..iterations, reduce: {loss, params} do
+        {loss, params} ->
+          for {{x, y}, j} <- Enum.with_index(data), reduce: {loss, params} do
+            {loss, params} ->
+              {batch_loss, new_params} = step(params, x, y)
+              avg_loss = Nx.add(Nx.mean(batch_loss), loss) |> Nx.divide(j + 1)
+              IO.write("\rEpoch: #{i}, Loss: #{Nx.to_number(avg_loss)}")
+              {avg_loss, new_params}
+          end
+      end
+
+    trained_params
+  end
+end
+```
+
+```elixir
+IO.inspect(true_params)
+
+key = Nx.Random.key(0)
+trained_params = SGD.train(train_data, 1, key)
+SGD.evaluate(trained_params, test_data)
+```
+
+```elixir
+# Random params much higher loss in comparison
+key = Nx.Random.key(100)
+{random_params, _} = SGD.init_random_params(key)
+SGD.evaluate(random_params, test_data)
+```
+
+```elixir
+# Testing model with non linear true function (adds cosinus)
+key = Nx.Random.key(42)
+
+{true_params, new_key} = Nx.Random.uniform(key, shape: {32, 1})
+
+true_function = fn params, x ->
+  Nx.dot(x, params) |> Nx.cos()
+end
+
+{train_x, new_key} = Nx.Random.uniform(new_key, shape: {10000, 32})
+train_y = true_function.(true_params, train_x)
+train_data = Enum.zip(Nx.to_batched(train_x, 1), Nx.to_batched(train_y, 1))
+
+{test_x, _new_key} = Nx.Random.uniform(new_key, shape: {10000, 32})
+test_y = true_function.(true_params, test_x)
+test_data = Enum.zip(Nx.to_batched(test_x, 1), Nx.to_batched(test_y, 1))
+
+key = Nx.Random.key(0)
+trained_params = SGD.train(train_data, 10, key)
+SGD.evaluate(trained_params, test_data)
+```
+
+## Peering into the blackbox
+
+Hyperparameters are details about the algorithm not directly learnable that affect its performance. For example the learning the rate value. This cannot be quantified as a simple function and are usually solved with black-box optimization and exhaustive search.
+
+Evolutionary algorithms generate a population of solutions to a problem and then combine the best ones to form better solutions.
+
+Grid Search performs an exhaustive search over a discrete grid of parameters. It is the most common approach in machine learning.
