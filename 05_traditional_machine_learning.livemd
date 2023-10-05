@@ -1,0 +1,244 @@
+# Chapter 5: Traditional Machine Learning
+
+```elixir
+Mix.install([
+  {:scholar, "~> 0.1"},
+  {:nx, "~> 0.5"},
+  {:exla, "~> 0.5"},
+  {:vega_lite, "~> 0.1.6"},
+  {:kino_vega_lite, "~> 0.1.6"},
+  {:scidata, "~> 0.1"}
+])
+```
+
+## Set up
+
+```elixir
+Nx.default_backend(EXLA.Backend)
+Nx.Defn.default_options(compiler: EXLA)
+```
+
+## Linear Regression with Scholar
+
+Data generation.
+
+```elixir
+m = :random.uniform() * 10
+b = :random.uniform() * 10
+
+key = Nx.Random.key(42)
+size = 100
+{x, new_key} = Nx.Random.normal(key, 0.0, 1.0, shape: {size, 1})
+{noise_x, new_key} = Nx.Random.normal(new_key, 0.0, 1.0, shape: {size, 1})
+
+y =
+  m
+  |> Nx.multiply(Nx.add(x, noise_x))
+  |> Nx.add(b)
+```
+
+Data visualization.
+
+```elixir
+alias VegaLite, as: Vl
+
+Vl.new(title: "Scatterplot", width: 720, height: 480)
+|> Vl.data_from_values(%{
+  x: Nx.to_flat_list(x),
+  y: Nx.to_flat_list(y)
+})
+|> Vl.mark(:point)
+|> Vl.encode_field(:x, "x", type: :quantitative)
+|> Vl.encode_field(:y, "y", type: :quantitative)
+```
+
+Building the linear regression.
+
+```elixir
+model = Scholar.Linear.LinearRegression.fit(x, y)
+```
+
+Evaluating and visualizing the linear regression.
+
+```elixir
+Scholar.Linear.LinearRegression.predict(model, Nx.iota({3, 1}))
+```
+
+```elixir
+pred_xs = Nx.linspace(-3.0, 3.0, n: 100) |> Nx.new_axis(-1)
+pred_ys = Scholar.Linear.LinearRegression.predict(model, pred_xs)
+
+title = "Scatterplot Distribution and Fit Curve"
+
+Vl.new(title: title, width: 720, height: 480)
+|> Vl.data_from_values(%{
+  x: Nx.to_flat_list(x),
+  y: Nx.to_flat_list(y),
+  pred_x: Nx.to_flat_list(pred_xs),
+  pred_y: Nx.to_flat_list(pred_ys)
+})
+|> Vl.layers([
+  Vl.new()
+  |> Vl.mark(:point)
+  |> Vl.encode_field(:x, "x", type: :quantitative)
+  |> Vl.encode_field(:y, "y", type: :quantitative),
+  Vl.new()
+  |> Vl.mark(:line)
+  |> Vl.encode_field(:x, "pred_x", type: :quantitative)
+  |> Vl.encode_field(:y, "pred_y", type: :quantitative)
+])
+```
+
+## Logistic Regression with Scholar
+
+Preparing the data.
+
+```elixir
+{inputs, targets} = Scidata.Wine.download()
+```
+
+```elixir
+{train, test} =
+  inputs
+  |> Enum.zip(targets)
+  |> Enum.shuffle()
+  |> Enum.split(floor(length(inputs) * 0.8))
+
+{train_inputs, train_targets} = Enum.unzip(train)
+train_inputs = Nx.tensor(train_inputs)
+train_targets = Nx.tensor(train_targets)
+
+{test_inputs, test_targets} = Enum.unzip(test)
+test_inputs = Nx.tensor(test_inputs)
+test_targets = Nx.tensor(test_targets)
+
+train_inputs = Scholar.Preprocessing.min_max_scale(train_inputs)
+test_inputs = Scholar.Preprocessing.min_max_scale(test_inputs)
+```
+
+Building the logistic regression model. There are 3 classes since there are 3 possible values in the targets.
+
+```elixir
+model =
+  Scholar.Linear.LogisticRegression.fit(
+    train_inputs,
+    train_targets,
+    num_classes: 3
+  )
+```
+
+Evaluating and visualizing the logistic regression model.
+
+```elixir
+test_preds = Scholar.Linear.LogisticRegression.predict(model, test_inputs)
+accuracy = Scholar.Metrics.Classification.accuracy(test_targets, test_preds)
+```
+
+```elixir
+confusion_matrix =
+  Scholar.Metrics.Classification.confusion_matrix(test_targets, test_preds, num_classes: 3)
+```
+
+```elixir
+Vl.new(title: "Confusion Matrix", width: 740, height: 680)
+|> Vl.data_from_values(%{
+  predicted: Nx.to_flat_list(test_preds),
+  actual: Nx.to_flat_list(test_targets)
+})
+|> Vl.mark(:rect)
+|> Vl.encode_field(:x, "predicted")
+|> Vl.encode_field(:y, "actual")
+|> Vl.encode(:color, aggregate: :count)
+```
+
+## K Nearest Neig 0.6000000238418579hbours
+
+Building the model. Notice nothing is really being fitted, just keeping track of the data points since it will simple be inferring from existing data.
+
+```elixir
+model = Scholar.Neighbors.KNearestNeighbors.fit(train_inputs, train_targets, num_classes: 3)
+```
+
+Evaluating the model.
+
+```elixir
+Scholar.Metrics.Classification.accuracy(test_targets, test_preds)
+```
+
+```elixir
+Scholar.Metrics.Classification.confusion_matrix(test_targets, test_preds, num_classes: 3)
+```
+
+## Clustering
+
+Clustering is a type of unsupervised learning. The machine learns from inputs without access to any target information. It identifies clusters in a dataset (aka groups of similar data points). There are many approaches to clustering.
+
+<!-- livebook:{"break_markdown":true} -->
+
+Building the model.
+
+```elixir
+model = Scholar.Cluster.KMeans.fit(train_inputs, num_clusters: 3)
+```
+
+Visualizing teh model.
+
+```elixir
+wine_features = %{
+  "feature_1" => train_inputs[[.., 1]] |> Nx.to_flat_list(),
+  "feature_2" => train_inputs[[.., 2]] |> Nx.to_flat_list(),
+  "class" => train_targets |> Nx.to_flat_list()
+}
+
+coords = [
+  cluster_feature_1: model.clusters[[.., 1]] |> Nx.to_flat_list(),
+  cluster_feature_2: model.clusters[[.., 2]] |> Nx.to_flat_list()
+]
+
+title =
+  "Scatterplot of data samples projected on plane wine" <>
+    " feature 1 x wine feature 2"
+
+Vl.new(
+  width: 700,
+  height: 300,
+  title: [
+    text: title,
+    offset: 25
+  ]
+)
+|> Vl.layers([
+  Vl.new()
+  |> Vl.data_from_values(wine_features)
+  |> Vl.mark(:circle)
+  |> Vl.encode_field(:x, "feature_1", type: :quantitative)
+  |> Vl.encode_field(:y, "feature_2", type: :quantitative)
+  |> Vl.encode_field(:color, "class"),
+  Vl.new()
+  |> Vl.data_from_values(coords)
+  |> Vl.mark(:circle, color: :green, size: 100)
+  |> Vl.encode_field(:x, "cluster_feature_1", type: :quantitative)
+  |> Vl.encode_field(:y, "cluster_feature_2", type: :quantitative)
+])
+```
+
+Evaluating the model
+
+```elixir
+test_preds = Scholar.Cluster.KMeans.predict(model, test_inputs)
+```
+
+```elixir
+test_targets
+```
+
+I suspect the low accuracy is due to the categorical target values being swapped around given this is an unsupervised learning model so it is up to the model to decide which number it assigns to each cluster.
+
+```elixir
+Scholar.Metrics.Classification.accuracy(test_targets, test_preds)
+Scholar.Metrics.Clustering.
+```
+
+## Making Decisions
+
+Checkout EXGBoost library that implements decision trees with gradient boosting. Out of the scope of the book but very valuable.
